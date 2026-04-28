@@ -70,14 +70,12 @@ pyvisa-py pure-Python backend -- no NI-VISA required.
  QUICK START
 --------------------------------------------------------------------------------
 
-  Edit the resource strings at the top of example.py:
-
-    KEYSIGHT_RESOURCE = "USB0::0x2A8D::0x0301::MY_SERIAL::INSTR"
-    FLUKE_RESOURCE    = "ASRL/dev/ttyUSB0::INSTR"
-
-  Then run:
+  No configuration needed. Plug in both instruments and run:
 
     python example.py
+
+  The script automatically scans all VISA resources and identifies each
+  instrument by its *IDN? response -- no hardcoded resource strings required.
 
   Sample output:
 

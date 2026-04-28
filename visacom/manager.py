@@ -101,27 +101,6 @@ class InstrumentManager:
             logger.info("Configuring '%s'...", name)
             fn(inst)
 
-    def read_all(self, **readers: Callable[[Instrument], Any]) -> Dict[str, Any]:
-        """
-        Call a per-instrument read callable and return a {name: value} dict.
-
-        Example::
-
-            readings = manager.read_all(
-                keysight=lambda inst: inst.read_ac_voltage(),
-                fluke=lambda inst:    inst.read_ac_voltage(),
-            )
-        """
-        results: Dict[str, Any] = {}
-        for name, fn in readers.items():
-            inst = self.get(name)
-            try:
-                results[name] = fn(inst)
-            except (InstrumentError, Exception) as exc:
-                logger.error("Read failed for '%s': %s", name, exc)
-                results[name] = None
-        return results
-
     def identify_all(self) -> Dict[str, str]:
         """Send *IDN? to every registered instrument and return the responses."""
         return {name: inst.identify() for name, inst in self._instruments.items()}

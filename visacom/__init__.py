@@ -9,10 +9,13 @@ from .base import Instrument
 from .keysight import KeysightDMM
 from .fluke import Fluke8845A
 from .manager import InstrumentManager
+from .discover import discover, DiscoveredInstrument
 
 __all__ = [
     "Instrument",
     "KeysightDMM",
     "Fluke8845A",
     "InstrumentManager",
+    "discover",
+    "DiscoveredInstrument",
 ]

@@ -6,7 +6,6 @@ Resource string example: USB0::0x2A8D::0x0301::MY_SERIAL::INSTR
 """
 
 import logging
-from typing import Optional
 
 from .base import Instrument
 

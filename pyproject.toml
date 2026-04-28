@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "visacom"
+version = "0.1.0"
+description = "VISA-based instrument control library for lab automation"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+dependencies = [
+    "pyvisa>=1.13",
+    "pyvisa-py>=0.7",
+    "pyserial>=3.5",
+]
+
+[project.urls]
+Repository = "https://github.com/achiraabhishek294/visacom"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["visacom*"]
