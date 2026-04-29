@@ -225,6 +225,80 @@ def _test_fluke(res: pyvisa.resources.Resource, resource_name: str) -> int:
     return failures
 
 
+# ── Yokogawa WT310 tests ─────────────────────────────────────────────────────
+
+def _test_yokogawa(res: pyvisa.resources.Resource, resource_name: str) -> int:
+    """Run Yokogawa WT310-specific tests. Returns number of failures."""
+    failures = 0
+    term = "\n"
+    res.read_termination  = term
+    res.write_termination = term
+
+    # --- IDN -----------------------------------------------------------------
+    _step("*IDN? response")
+    try:
+        idn = res.query("*IDN?").strip()
+        _result(PASS, idn)
+    except Exception as exc:
+        _result(FAIL, str(exc)); failures += 1
+
+    # --- Set ASCII numeric format ---------------------------------------------
+    _step(":NUMERIC:FORMAT ASCII")
+    try:
+        res.write(":NUMERIC:FORMAT ASCII")
+        time.sleep(0.1)
+        _result(PASS)
+    except Exception as exc:
+        _result(FAIL, str(exc)); failures += 1
+
+    # --- Configure 3 numeric items -------------------------------------------
+    _step(":NUMERIC:NORMAL:NUMBER 3  (V, I, P)")
+    try:
+        res.write(":NUMERIC:NORMAL:NUMBER 3")
+        res.write(":NUMERIC:NORMAL:ITEM1 U,1")
+        res.write(":NUMERIC:NORMAL:ITEM2 I,1")
+        res.write(":NUMERIC:NORMAL:ITEM3 P,1")
+        time.sleep(0.1)
+        errs = drain_error_queue(res, term)
+        real_errs = [e for e in errs if e.split(",")[0].strip() not in ("0","+0")]
+        if real_errs:
+            _result(WARN, format_error_queue(errs)); failures += 1
+        else:
+            _result(PASS)
+    except Exception as exc:
+        _result(FAIL, str(exc)); failures += 1
+
+    # --- Auto range ----------------------------------------------------------
+    _step(":INPUT voltage + current AUTO range")
+    try:
+        res.write(":INPUT:ELEMENT1:VOLTAGE:AUTO ON")
+        res.write(":INPUT:ELEMENT1:CURRENT:AUTO ON")
+        _result(PASS)
+    except Exception as exc:
+        _result(WARN, str(exc))
+
+    # --- Read values ---------------------------------------------------------
+    _step(":NUMERIC:NORMAL:VALUE? (V, I, P)")
+    try:
+        raw = res.query(":NUMERIC:NORMAL:VALUE?").strip()
+        tokens = [t.strip() for t in raw.split(",")]
+        if len(tokens) >= 3:
+            v, i, p = float(tokens[0]), float(tokens[1]), float(tokens[2])
+            _result(PASS, f"{v:.3f} V  {i:.4f} A  {p:.3f} W")
+        else:
+            _result(WARN, f"only {len(tokens)} token(s) returned: {raw}")
+    except Exception as exc:
+        _result(FAIL, str(exc)); failures += 1
+
+    # --- Error queue after measurement ---------------------------------------
+    _step("Error queue after measurement")
+    errs = drain_error_queue(res, term)
+    _result(PASS if all(e.split(",")[0].strip() in ("0","+0") for e in errs) else WARN,
+            format_error_queue(errs))
+
+    return failures
+
+
 # ── generic probe (for unrecognised instruments) ─────────────────────────────
 
 def _test_generic(res: pyvisa.resources.Resource, resource_name: str) -> int:
@@ -252,12 +326,14 @@ def _test_generic(res: pyvisa.resources.Resource, resource_name: str) -> int:
 _INSTRUMENT_TESTS = {
     "keysight": _test_keysight,
     "fluke":    _test_fluke,
+    "yokogawa": _test_yokogawa,
 }
 
 _SIGNATURES = [
-    (["KEYSIGHT"], "keysight"),
-    (["AGILENT"],  "keysight"),
-    (["FLUKE"],    "fluke"),
+    (["KEYSIGHT"],  "keysight"),
+    (["AGILENT"],   "keysight"),
+    (["FLUKE"],     "fluke"),
+    (["YOKOGAWA"],  "yokogawa"),
 ]
 
 def _identify(idn: str) -> str:

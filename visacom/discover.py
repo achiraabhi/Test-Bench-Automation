@@ -35,6 +35,9 @@ _SIGNATURES: List[tuple] = [
     # Fluke DMMs
     (["FLUKE", "8845"],     "fluke"),
     (["FLUKE", "8846"],     "fluke"),
+    # Yokogawa power meters
+    (["YOKOGAWA", "WT310"], "yokogawa"),
+    (["YOKOGAWA", "WT310E"],"yokogawa"),
 ]
 
 _DISCOVERY_TIMEOUT_MS = 2000   # short timeout so hung ports don't stall the scan

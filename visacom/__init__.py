@@ -8,6 +8,7 @@ Exposes the primary public API so callers only need:
 from .base import Instrument
 from .keysight import KeysightDMM
 from .fluke import Fluke8845A
+from .yokogawa import YokogawaWT310, PowerReading
 from .manager import InstrumentManager
 from .discover import discover, DiscoveredInstrument
 
@@ -15,6 +16,8 @@ __all__ = [
     "Instrument",
     "KeysightDMM",
     "Fluke8845A",
+    "YokogawaWT310",
+    "PowerReading",
     "InstrumentManager",
     "discover",
     "DiscoveredInstrument",
