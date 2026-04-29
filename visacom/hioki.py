@@ -184,9 +184,12 @@ class HiokiRM3545(Instrument):
             logger.warning("Hioki: unparseable response %r", raw)
             return MEAS_ERROR
 
-        if   val >=  _OL_VALUE:  return OL
-        elif val <= _UL_VALUE:   return UL
-        elif val >=  _ERR_VALUE: return MEAS_ERROR
+        if val >= _OL_VALUE:
+            return OL
+        elif val <= _UL_VALUE:
+            return UL
+        elif val >= _ERR_VALUE:
+            return MEAS_ERROR
         return val
 
     # ── Reading measured values ───────────────────────────────────────────

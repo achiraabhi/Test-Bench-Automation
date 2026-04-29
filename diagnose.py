@@ -73,7 +73,8 @@ def drain_error_queue(res: pyvisa.resources.Resource, term: str = "\n") -> list[
     return errors
 
 def format_error_queue(errors: list[str]) -> str:
-    no_error = lambda e: e.split(",")[0].strip() in ("0", "+0")
+    def no_error(e: str) -> bool:
+        return e.split(",")[0].strip() in ("0", "+0")
     real = [e for e in errors if not no_error(e)]
     if not real:
         return _green("queue empty")
@@ -102,7 +103,8 @@ def _test_keysight(res: pyvisa.resources.Resource, resource_name: str) -> int:
         idn = res.query("*IDN?").strip()
         _result(PASS, idn)
     except Exception as exc:
-        _result(FAIL, str(exc)); failures += 1
+        _result(FAIL, str(exc))
+        failures += 1
 
     # --- Error queue after reset ---------------------------------------------
     _step("Error queue after *RST")
@@ -118,11 +120,13 @@ def _test_keysight(res: pyvisa.resources.Resource, resource_name: str) -> int:
         errs = drain_error_queue(res, term)
         real_errs = [e for e in errs if e.split(",")[0].strip() not in ("0","+0")]
         if real_errs:
-            _result(WARN, format_error_queue(errs)); failures += 1
+            _result(WARN, format_error_queue(errs))
+            failures += 1
         else:
             _result(PASS)
     except Exception as exc:
-        _result(FAIL, str(exc)); failures += 1
+        _result(FAIL, str(exc))
+        failures += 1
 
     # --- INIT + FETCH? -------------------------------------------------------
     _step("INIT + FETCH? (single reading)")
@@ -132,7 +136,8 @@ def _test_keysight(res: pyvisa.resources.Resource, resource_name: str) -> int:
         val = float(raw)
         _result(PASS, f"{val:.6f} V")
     except Exception as exc:
-        _result(FAIL, str(exc)); failures += 1
+        _result(FAIL, str(exc))
+        failures += 1
 
     # --- Error queue after measurement ---------------------------------------
     _step("Error queue after measurement")
@@ -168,7 +173,8 @@ def _test_fluke(res: pyvisa.resources.Resource, resource_name: str) -> int:
         idn = res.query("*IDN?").strip()
         _result(PASS, idn)
     except Exception as exc:
-        _result(FAIL, str(exc)); failures += 1
+        _result(FAIL, str(exc))
+        failures += 1
 
     # --- SYST:REM ------------------------------------------------------------
     _step("SYST:REM (enter remote mode)")
@@ -177,7 +183,8 @@ def _test_fluke(res: pyvisa.resources.Resource, resource_name: str) -> int:
         time.sleep(0.2)
         _result(PASS)
     except Exception as exc:
-        _result(FAIL, str(exc)); failures += 1
+        _result(FAIL, str(exc))
+        failures += 1
 
     # --- Error queue after remote --------------------------------------------
     _step("Error queue after SYST:REM")
@@ -193,11 +200,13 @@ def _test_fluke(res: pyvisa.resources.Resource, resource_name: str) -> int:
         errs = drain_error_queue(res, term)
         real_errs = [e for e in errs if e.split(",")[0].strip() not in ("0","+0")]
         if real_errs:
-            _result(WARN, format_error_queue(errs)); failures += 1
+            _result(WARN, format_error_queue(errs))
+            failures += 1
         else:
             _result(PASS)
     except Exception as exc:
-        _result(FAIL, str(exc)); failures += 1
+        _result(FAIL, str(exc))
+        failures += 1
 
     # --- READ? ---------------------------------------------------------------
     _step("READ? (single reading)")
@@ -206,7 +215,8 @@ def _test_fluke(res: pyvisa.resources.Resource, resource_name: str) -> int:
         val = float(raw)
         _result(PASS, f"{val:.6f} V")
     except Exception as exc:
-        _result(FAIL, str(exc)); failures += 1
+        _result(FAIL, str(exc))
+        failures += 1
 
     # --- Error queue after measurement ---------------------------------------
     _step("Error queue after measurement")
@@ -240,7 +250,8 @@ def _test_yokogawa(res: pyvisa.resources.Resource, resource_name: str) -> int:
         idn = res.query("*IDN?").strip()
         _result(PASS, idn)
     except Exception as exc:
-        _result(FAIL, str(exc)); failures += 1
+        _result(FAIL, str(exc))
+        failures += 1
 
     # --- Set ASCII numeric format ---------------------------------------------
     _step(":NUMERIC:FORMAT ASCII")
@@ -249,7 +260,8 @@ def _test_yokogawa(res: pyvisa.resources.Resource, resource_name: str) -> int:
         time.sleep(0.1)
         _result(PASS)
     except Exception as exc:
-        _result(FAIL, str(exc)); failures += 1
+        _result(FAIL, str(exc))
+        failures += 1
 
     # --- Configure 3 numeric items -------------------------------------------
     _step(":NUMERIC:NORMAL:NUMBER 3  (V, I, P)")
@@ -262,11 +274,13 @@ def _test_yokogawa(res: pyvisa.resources.Resource, resource_name: str) -> int:
         errs = drain_error_queue(res, term)
         real_errs = [e for e in errs if e.split(",")[0].strip() not in ("0","+0")]
         if real_errs:
-            _result(WARN, format_error_queue(errs)); failures += 1
+            _result(WARN, format_error_queue(errs))
+            failures += 1
         else:
             _result(PASS)
     except Exception as exc:
-        _result(FAIL, str(exc)); failures += 1
+        _result(FAIL, str(exc))
+        failures += 1
 
     # --- Auto range ----------------------------------------------------------
     _step(":INPUT voltage + current AUTO range")
@@ -288,7 +302,8 @@ def _test_yokogawa(res: pyvisa.resources.Resource, resource_name: str) -> int:
         else:
             _result(WARN, f"only {len(tokens)} token(s) returned: {raw}")
     except Exception as exc:
-        _result(FAIL, str(exc)); failures += 1
+        _result(FAIL, str(exc))
+        failures += 1
 
     # --- Error queue after measurement ---------------------------------------
     _step("Error queue after measurement")
@@ -326,7 +341,8 @@ def _test_hioki(res: pyvisa.resources.Resource, resource_name: str) -> int:
         time.sleep(0.05)
         _result(PASS)
     except Exception as exc:
-        _result(FAIL, str(exc)); failures += 1
+        _result(FAIL, str(exc))
+        failures += 1
 
     # --- IDN -----------------------------------------------------------------
     _step("*IDN? response")
@@ -334,7 +350,8 @@ def _test_hioki(res: pyvisa.resources.Resource, resource_name: str) -> int:
         idn = res.query("*IDN?").strip()
         _result(PASS, idn)
     except Exception as exc:
-        _result(FAIL, str(exc)); failures += 1
+        _result(FAIL, str(exc))
+        failures += 1
 
     # --- Clear status --------------------------------------------------------
     _step("*CLS (clear status registers)")
@@ -343,7 +360,8 @@ def _test_hioki(res: pyvisa.resources.Resource, resource_name: str) -> int:
         time.sleep(0.05)
         _result(PASS)
     except Exception as exc:
-        _result(FAIL, str(exc)); failures += 1
+        _result(FAIL, str(exc))
+        failures += 1
 
     # --- Configure single-shot -----------------------------------------------
     _step(":INITIATE:CONTINUOUS OFF")
@@ -352,7 +370,8 @@ def _test_hioki(res: pyvisa.resources.Resource, resource_name: str) -> int:
         time.sleep(0.05)
         _result(PASS)
     except Exception as exc:
-        _result(FAIL, str(exc)); failures += 1
+        _result(FAIL, str(exc))
+        failures += 1
 
     # --- Auto range ----------------------------------------------------------
     _step(":SENSE:RESISTANCE:RANGE:AUTO ON")
@@ -361,7 +380,8 @@ def _test_hioki(res: pyvisa.resources.Resource, resource_name: str) -> int:
         time.sleep(0.05)
         _result(PASS)
     except Exception as exc:
-        _result(FAIL, str(exc)); failures += 1
+        _result(FAIL, str(exc))
+        failures += 1
 
     # --- Set speed MED -------------------------------------------------------
     _step(":SAMPLE:RATE MED")
@@ -370,7 +390,8 @@ def _test_hioki(res: pyvisa.resources.Resource, resource_name: str) -> int:
         time.sleep(0.05)
         _result(PASS)
     except Exception as exc:
-        _result(FAIL, str(exc)); failures += 1
+        _result(FAIL, str(exc))
+        failures += 1
 
     # --- READ? (single reading, extended timeout) ----------------------------
     _step(":READ? (single resistance reading)")
@@ -386,7 +407,8 @@ def _test_hioki(res: pyvisa.resources.Resource, resource_name: str) -> int:
         else:
             _result(PASS, f"{fval:.6E} Ω")
     except Exception as exc:
-        _result(FAIL, str(exc)); failures += 1
+        _result(FAIL, str(exc))
+        failures += 1
     finally:
         res.timeout = orig_timeout
 
@@ -401,7 +423,8 @@ def _test_hioki(res: pyvisa.resources.Resource, resource_name: str) -> int:
         else:
             _result(PASS, f"ESR=0x{esr:02X}")
     except Exception as exc:
-        _result(FAIL, str(exc)); failures += 1
+        _result(FAIL, str(exc))
+        failures += 1
 
     # --- Return to local -----------------------------------------------------
     _step(":SYSTEM:LOCAL (return to local)")
@@ -430,9 +453,11 @@ def _test_generic(res: pyvisa.resources.Resource, resource_name: str) -> int:
                     return 0
             except Exception:
                 continue
-        _result(FAIL, "no response on \\n or \\r\\n"); failures += 1
+        _result(FAIL, "no response on \\n or \\r\\n")
+        failures += 1
     except Exception as exc:
-        _result(FAIL, str(exc)); failures += 1
+        _result(FAIL, str(exc))
+        failures += 1
     return failures
 
 

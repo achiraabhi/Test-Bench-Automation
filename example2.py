@@ -15,7 +15,6 @@ Run:
 
 import logging
 import sys
-import time
 
 from visacom import KeysightDMM, Fluke8845A, YokogawaWT310, HiokiRM3545
 from visacom.discover import discover
