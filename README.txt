@@ -13,10 +13,11 @@ pyvisa-py pure-Python backend -- no NI-VISA required.
  SUPPORTED INSTRUMENTS
 --------------------------------------------------------------------------------
 
-  Instrument                Interface              VISA Resource Example
-  ------------------------  ---------------------  ------------------------------------
-  Keysight 344xxA DMM       USB-TMC                USB0::0x2A8D::0x0301::MY_SERIAL::INSTR
-  Fluke 8845A / 8846A DMM   RS-232 via USB adapter ASRL/dev/ttyUSB0::INSTR
+  Instrument              Type               Interface               VISA Resource Example
+  ----------------------  -----------------  ----------------------  ------------------------------------
+  Keysight 344xxA DMM     Digital Multimeter USB-TMC                 USB0::0x2A8D::0x0301::MY_SERIAL::INSTR
+  Fluke 8845A / 8846A     Digital Multimeter RS-232 via USB adapter  ASRL/dev/ttyUSB0::INSTR
+  Yokogawa WT310 / WT310E Power Meter        USB-TMC                 USB0::0x0B21::0x0025::MY_SERIAL::INSTR
 
 
 --------------------------------------------------------------------------------
@@ -29,11 +30,15 @@ pyvisa-py pure-Python backend -- no NI-VISA required.
   |   |-- base.py          Instrument abstract base class
   |   |-- keysight.py      KeysightDMM driver
   |   |-- fluke.py         Fluke8845A driver
-  |   +-- manager.py       InstrumentManager (multi-device orchestration)
-  |-- example.py           Working two-DMM example script
+  |   |-- yokogawa.py      YokogawaWT310 driver
+  |   |-- manager.py       InstrumentManager (multi-device orchestration)
+  |   +-- discover.py      Automatic instrument discovery via *IDN?
+  |-- example.py           Two-DMM example with CSV logging
+  |-- example2.py          Auto-detect any instrument, print 10 readings
+  |-- diagnose.py          Connection and communication diagnostic tool
   |-- requirements.txt
-  |-- README.md
-  +-- README.txt
+  |-- pyproject.toml
+  +-- README.md
 
 
 --------------------------------------------------------------------------------
@@ -53,16 +58,13 @@ pyvisa-py pure-Python backend -- no NI-VISA required.
  INSTALLATION
 --------------------------------------------------------------------------------
 
-  # Clone the repository
-  git clone <your-repo-url>
-  cd visacom
+  git clone https://github.com/achiraabhi/Test-Bench-Automation.git
+  cd Test-Bench-Automation
 
-  # Create and activate the virtual environment
   python3 -m venv .venv
   source .venv/bin/activate          # Linux / Raspberry Pi
   # .venv\Scripts\activate           # Windows
 
-  # Install dependencies
   pip install -r requirements.txt
 
 
@@ -70,54 +72,37 @@ pyvisa-py pure-Python backend -- no NI-VISA required.
  QUICK START
 --------------------------------------------------------------------------------
 
-  No configuration needed. Plug in both instruments and run:
+  No configuration needed. Plug in your instruments and run:
 
-    python example.py
+    python example.py     # Keysight + Fluke, CSV logging
+    python example2.py    # any connected instrument, 10 readings to terminal
 
-  The script automatically scans all VISA resources and identifies each
-  instrument by its *IDN? response -- no hardcoded resource strings required.
-
-  Sample output:
-
-    Timestamp                      Keysight (V_AC)    Fluke (V_AC)
-    -----------------------------------------------------------------
-    2026-04-28T10:00:00.000Z           230.012345 V    230.009871 V
-    2026-04-28T10:00:02.000Z           230.011987 V    230.010234 V
-
-  CSV logs are written to the logs/ directory automatically.
+  Both scripts auto-discover instruments by *IDN? -- no resource strings to edit.
 
 
 --------------------------------------------------------------------------------
- USAGE IN YOUR OWN CODE
+ EXAMPLE SCRIPTS
 --------------------------------------------------------------------------------
 
-  from visacom import KeysightDMM, Fluke8845A, InstrumentManager
-  from pathlib import Path
+  example.py
+  ----------
+  Connects to the Keysight DMM and Fluke 8845A, configures AC voltage,
+  reads in a loop, and saves results to a timestamped CSV in logs/.
 
-  keysight = KeysightDMM("USB0::0x2A8D::0x0301::MY_SERIAL::INSTR")
-  fluke    = Fluke8845A("ASRL/dev/ttyUSB0::INSTR")
+  example2.py
+  -----------
+  Works with any combination: Keysight, Fluke, and/or Yokogawa WT310.
+  Prints 10 readings to the terminal. No CSV output.
 
-  with InstrumentManager(log_dir=Path("logs")) as mgr:
-      mgr.add_instrument("keysight", keysight)
-      mgr.add_instrument("fluke", fluke)
+  diagnose.py
+  -----------
+  Run this when an instrument misbehaves. Tests every layer from port
+  visibility to a live reading, printing PASS / FAIL / WARN for each step
+  and dumping the SCPI error queue.
 
-      mgr.configure_all(
-          keysight=lambda inst: inst.configure_ac_voltage(),
-          fluke=lambda inst:    inst.configure_ac_voltage(),
-      )
-
-      for row in mgr.read_loop(
-          readers=dict(
-              keysight=lambda inst: inst.read_ac_voltage(),
-              fluke=lambda inst:    inst.read_ac_voltage(),
-          ),
-          interval_s=2.0,
-          count=10,
-      ):
-          print(row)
-
-  InstrumentManager closes all instruments and flushes the CSV log
-  automatically on exit via the context manager.
+    python diagnose.py                        # test all discovered instruments
+    python diagnose.py --list                 # list VISA resources only
+    python diagnose.py "ASRL/dev/ttyUSB0::INSTR"  # test one resource
 
 
 --------------------------------------------------------------------------------
@@ -133,10 +118,26 @@ pyvisa-py pure-Python backend -- no NI-VISA required.
   Fluke 8845A (RS-232)
   --------------------
   - Communication : RS-232 via USB adapter, 9600 baud, 8N1
-  - Must send SYST:REM on connect to enter remote mode (done automatically)
+  - SYST:REM sent automatically on connect
   - Measurement   : READ? (atomic arm + measure + return)
   - Termination   : \r\n
-  - SYST:LOC is sent automatically on close to return front-panel control
+  - SYST:LOC sent automatically on close
+
+  Yokogawa WT310 (USB)
+  --------------------
+  - Communication : USB-TMC
+  - Reads 7 quantities atomically: V, I, W, VA, var, PF, Hz
+  - Numeric item slots configured automatically on connect
+  - Over-range / invalid readings returned as None (instrument sends 9.91E+37)
+  - Termination   : \n
+
+  Yokogawa methods:
+    read_power()         -- PowerReading dataclass with all 7 quantities
+    read_voltage()       -- RMS voltage (V)
+    read_current()       -- RMS current (A)
+    read_active_power()  -- Active power (W)
+    read_power_factor()  -- Power factor (0-1)
+    read_frequency()     -- Supply frequency (Hz)
 
 
 --------------------------------------------------------------------------------
@@ -158,13 +159,16 @@ pyvisa-py pure-Python backend -- no NI-VISA required.
            def read_dc_current(self) -> float:
                return float(self.query_with_retry("READ?"))
 
-  2. Export it in visacom/__init__.py:
+  2. Add its IDN signature in visacom/discover.py:
+
+       _SIGNATURES = [
+           ...
+           (["KEITHLEY", "2400"], "keithley"),
+       ]
+
+  3. Export it in visacom/__init__.py:
 
        from .keithley import Keithley2400
-
-  3. Register it with the manager:
-
-       mgr.add_instrument("keithley", Keithley2400("GPIB0::24::INSTR"))
 
   No other files need to change.
 
