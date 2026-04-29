@@ -9,6 +9,7 @@ from .base import Instrument
 from .keysight import KeysightDMM
 from .fluke import Fluke8845A
 from .yokogawa import YokogawaWT310, PowerReading
+from .hioki import HiokiRM3545
 from .manager import InstrumentManager
 from .discover import discover, DiscoveredInstrument
 
@@ -18,6 +19,7 @@ __all__ = [
     "Fluke8845A",
     "YokogawaWT310",
     "PowerReading",
+    "HiokiRM3545",
     "InstrumentManager",
     "discover",
     "DiscoveredInstrument",

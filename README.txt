@@ -18,6 +18,7 @@ pyvisa-py pure-Python backend -- no NI-VISA required.
   Keysight 344xxA DMM     Digital Multimeter USB-TMC                 USB0::0x2A8D::0x0301::MY_SERIAL::INSTR
   Fluke 8845A / 8846A     Digital Multimeter RS-232 via USB adapter  ASRL/dev/ttyUSB0::INSTR
   Yokogawa WT310 / WT310E Power Meter        USB-TMC                 USB0::0x0B21::0x0039::MY_SERIAL::INSTR
+  Hioki RM3544 / RM3545   Resistance Meter   RS-232 / USB virtual COM ASRL/dev/ttyUSB1::INSTR
 
 
 --------------------------------------------------------------------------------
@@ -31,6 +32,7 @@ pyvisa-py pure-Python backend -- no NI-VISA required.
   |   |-- keysight.py      KeysightDMM driver
   |   |-- fluke.py         Fluke8845A driver
   |   |-- yokogawa.py      YokogawaWT310 driver
+  |   |-- hioki.py         HiokiRM3545 driver
   |   |-- manager.py       InstrumentManager (multi-device orchestration)
   |   +-- discover.py      Automatic instrument discovery via *IDN?
   |-- example.py           Two-DMM example with CSV logging
@@ -91,7 +93,7 @@ pyvisa-py pure-Python backend -- no NI-VISA required.
 
   example2.py
   -----------
-  Works with any combination: Keysight, Fluke, and/or Yokogawa WT310.
+  Works with any combination: Keysight, Fluke, Yokogawa WT310, Hioki RM3545.
   Prints 10 readings to the terminal. No CSV output.
 
   diagnose.py
@@ -102,7 +104,7 @@ pyvisa-py pure-Python backend -- no NI-VISA required.
 
     python diagnose.py                             # test all discovered instruments
     python diagnose.py --list                      # list VISA resources only
-    python diagnose.py "ASRL/dev/ttyUSB0::INSTR"  # test one resource
+    python diagnose.py "ASRL/dev/ttyUSB1::INSTR"  # test one resource
 
 
 --------------------------------------------------------------------------------
@@ -123,8 +125,8 @@ pyvisa-py pure-Python backend -- no NI-VISA required.
   - Termination   : \r\n
   - SYST:LOC sent automatically on close
 
-  Yokogawa WT310 / WT310E (USB)
-  -----------------------------
+  Yokogawa WT310 (USB)
+  --------------------
   - Communication : USB-TMC
   - Reads 7 quantities atomically: V, I, W, VA, var, PF, Hz
   - Numeric item slots configured automatically on connect
@@ -138,6 +140,35 @@ pyvisa-py pure-Python backend -- no NI-VISA required.
     read_active_power()  -- Active power (W)
     read_power_factor()  -- Power factor (0-1)
     read_frequency()     -- Supply frequency (Hz)
+
+  Hioki RM3544 / RM3545 (RS-232 / USB virtual COM)
+  -------------------------------------------------
+  - Communication : 9600 baud, 8N1, no flow control
+  - Termination   : CR+LF (\r\n) on both TX and RX
+  - Call initialize() once after connecting
+  - Non-standard SCPI -- uses Hioki-specific command names (see table below)
+  - Special return values: "OL" (overrange), "UL" (underrange), "ERROR"
+  - '+' sign in responses is returned as ASCII space -- handled automatically
+
+  Measurement methods:
+    read()                -- :READ?             single-shot, blocks up to 15 s
+    fetch()               -- :FETCH?            returns last value (continuous mode)
+    measure_resistance()  -- :MEASURE:RESISTANCE?  one-liner, no setup needed
+
+  Non-standard commands vs SCPI:
+    :SAMPLE:RATE FAST|MED|SLOW|SLOW2   vs  :SENSE:APERTURE <n>
+    :ADJUST                            vs  :CALIBRATION:ZERO
+    :CALCULATE:LIMIT:RESULT?           vs  :CALCULATE:LIMIT:FAIL?
+    :CALCULATE:LIMIT:JUDGE?            vs  :CALCULATE:LIMIT:FAIL?
+    :MEMORY                            vs  :TRACE
+    :SENSE:SCAN:...                    vs  :ROUTE:SCAN:...
+    Two ESRs (:ESR0?, :ESR1?)          vs  Single *ESR?
+
+  Measurement speed:
+    FAST   -- 100 ms  (high-speed scanning)
+    MED    -- 300 ms  (default, general use)
+    SLOW   -- 1 s     (higher accuracy)
+    SLOW2  -- 2 s     (best accuracy, RM3545 only)
 
 
 --------------------------------------------------------------------------------
@@ -231,30 +262,18 @@ pyvisa-py pure-Python backend -- no NI-VISA required.
   - Characters AFTER  the colon = Product ID (e.g. 0039)
 
   If nothing new appears, run:  dmesg | tail -20
-  to see what the kernel detected on the USB bus.
 
 
   STEP 2 -- Create the udev rule file
   ------------------------------------
     sudo nano /etc/udev/rules.d/99-usb-instruments.rules
 
-  nano will open a blank file. Do not close it yet.
-
 
   STEP 3 -- Type the rule
   ------------------------
     SUBSYSTEM=="usb", ATTR{idVendor}=="0b21", ATTR{idProduct}=="0039", MODE="0666"
 
-  Replace 0b21 and 0039 with your actual Vendor ID and Product ID.
-
-  What each part means:
-    SUBSYSTEM=="usb"          -- match only USB devices
-    ATTR{idVendor}=="0b21"    -- match this Vendor ID (Yokogawa)
-    ATTR{idProduct}=="0039"   -- match this Product ID (WT310E)
-    MODE="0666"               -- give read+write access to all users
-
-  To add a second instrument (e.g. Keysight), add another line below:
-    SUBSYSTEM=="usb", ATTR{idVendor}=="2a8d", ATTR{idProduct}=="0301", MODE="0666"
+  Add one line per instrument. No separate file needed per device.
 
 
   STEP 4 -- Save and exit nano
@@ -262,29 +281,23 @@ pyvisa-py pure-Python backend -- no NI-VISA required.
     CTRL + O   then   Enter   -- saves the file
     CTRL + X                  -- exits nano
 
-  Verify it was saved:
-    cat /etc/udev/rules.d/99-usb-instruments.rules
-
 
   STEP 5 -- Reload udev rules
   ----------------------------
     sudo udevadm control --reload-rules
     sudo udevadm trigger
 
-  Applies the new rule without a reboot.
-
 
   STEP 6 -- Replug the USB device
   --------------------------------
-  Unplug and replug the instrument. The rule only fires on a new connection
-  event.
+  Unplug and replug. The rule only fires on a new connection event.
 
 
   STEP 7 -- Test with Python
   ---------------------------
     python3 -c "import pyvisa; print(pyvisa.ResourceManager('@py').list_resources())"
 
-  Expected output (no ???, no warnings):
+  Expected (no ???):
     ('USB0::0x0B21::0x0039::MY123456::0::INSTR',)
 
 
@@ -292,46 +305,37 @@ pyvisa-py pure-Python backend -- no NI-VISA required.
  3. TEMPORARY QUICK FIX
 --------------------------------------------------------------------------------
 
-  If you need to get running immediately:
-
     sudo chmod -R 777 /dev/bus/usb/
 
-  NOTE: This is NOT permanent. Permissions reset on every reboot or replug.
-  Use the udev rule method for a lasting fix.
+  NOT permanent -- resets on every reboot or replug.
 
 
 --------------------------------------------------------------------------------
  4. OPTIONAL -- SAFER METHOD USING A GROUP
 --------------------------------------------------------------------------------
 
-  Instead of MODE="0666" (open to everyone), restrict access to the plugdev
-  group:
-
   Rule:
     SUBSYSTEM=="usb", ATTR{idVendor}=="0b21", ATTR{idProduct}=="0039", GROUP="plugdev", MODE="0660"
 
-  Add your user to the group:
+  Add your user:
     sudo usermod -aG plugdev $USER
 
-  A reboot (or "newgrp plugdev") is required for the group change to take
-  effect. Verify membership:
-    groups $USER    -- plugdev should appear in the list
+  Reboot or run:  newgrp plugdev
 
 
 --------------------------------------------------------------------------------
- 5. FOR RS-232 / SERIAL INSTRUMENTS (Fluke 8845A)
+ 5. FOR RS-232 / SERIAL INSTRUMENTS (Fluke 8845A, Hioki RM3545)
 --------------------------------------------------------------------------------
 
-  Serial-over-USB adapters (/dev/ttyUSB0) use a different group -- dialout:
+  Serial-over-USB adapters (/dev/ttyUSBx) use the dialout group:
 
     sudo usermod -aG dialout $USER
 
-  Then reboot, or run:
-    newgrp dialout
+  Then reboot or:  newgrp dialout
 
   Verify:
     ls -l /dev/ttyUSB0
-    # crw-rw---- 1 root dialout 188, 0 Apr 28 10:00 /dev/ttyUSB0
+    # crw-rw---- 1 root dialout ...
 
 
 --------------------------------------------------------------------------------
@@ -342,12 +346,12 @@ pyvisa-py pure-Python backend -- no NI-VISA required.
   ----  -------------------------------------------------  --------------------------------
   1     lsusb                                              Find Vendor ID and Product ID
   2     sudo nano /etc/udev/rules.d/99-usb-instruments...  Create rule file
-  3     (type rule, save with CTRL+O, exit with CTRL+X)   Add rule
+  3     (type rule, CTRL+O Enter, CTRL+X)                  Add and save rule
   4     sudo udevadm control --reload-rules                Reload without reboot
   5     sudo udevadm trigger                               Re-evaluate connected devices
   6     (unplug and replug)                                Fire the new rule
   7     python3 -c "... list_resources()"                  Verify no ???
-  -     sudo usermod -aG dialout $USER                     Fix serial (/dev/ttyUSBx)
+  -     sudo usermod -aG dialout $USER                     Fix serial /dev/ttyUSBx
   -     sudo usermod -aG plugdev $USER                     Safer alternative to 0666
   -     sudo chmod -R 777 /dev/bus/usb/                    Temporary fix only
 
@@ -356,28 +360,13 @@ pyvisa-py pure-Python backend -- no NI-VISA required.
  7. TIPS AND NOTES
 --------------------------------------------------------------------------------
 
-  - One rule covers all USB ports. The rule matches by Vendor/Product ID,
-    not by which physical USB port is used.
-
-  - Recheck IDs if the device changes. Different firmware versions or
-    hardware revisions can have different Product IDs. Confirm with lsusb
-    after any firmware update.
-
-  - Raspberry Pi default user is "pi". If $USER does not expand correctly
-    after sudo, use your literal username:
-      sudo usermod -aG plugdev pi
-
-  - dmesg is your best friend. If the device does not appear in lsusb at
-    all, run:  dmesg | tail -30  immediately after plugging in.
-
-  - Check the rule is loaded after reloading:
-      udevadm info --query=property --name=/dev/bus/usb/001/004 | grep -i mode
-
-  - Multiple instruments in one file. Add all rules to 99-usb-instruments.rules,
-    one line per instrument. No separate file needed per device.
-
-  - This guide applies to ALL USB-TMC instruments, not just the Yokogawa.
-    The same steps work for the Keysight DMM -- just swap in its IDs.
+  - One rule covers all USB ports (matches by Vendor/Product ID, not port).
+  - Recheck IDs after firmware updates -- Product ID may change.
+  - Raspberry Pi default user is "pi": sudo usermod -aG plugdev pi
+  - dmesg | tail -30 immediately after plugging in shows kernel USB events.
+  - Hioki RM3545 uses USB virtual COM -- use dialout group (Section 5),
+    not the udev rule.
+  - Multiple instruments: one rule per line in 99-usb-instruments.rules.
 
 
 --------------------------------------------------------------------------------

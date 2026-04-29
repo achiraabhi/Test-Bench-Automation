@@ -38,6 +38,9 @@ _SIGNATURES: List[tuple] = [
     # Yokogawa power meters
     (["YOKOGAWA", "WT310"], "yokogawa"),
     (["YOKOGAWA", "WT310E"],"yokogawa"),
+    # Hioki resistance meters
+    (["HIOKI", "RM3544"],   "hioki"),
+    (["HIOKI", "RM3545"],   "hioki"),
 ]
 
 _DISCOVERY_TIMEOUT_MS = 2000   # short timeout so hung ports don't stall the scan

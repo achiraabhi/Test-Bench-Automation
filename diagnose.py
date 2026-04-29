@@ -299,6 +299,121 @@ def _test_yokogawa(res: pyvisa.resources.Resource, resource_name: str) -> int:
     return failures
 
 
+# ── Hioki RM3544 / RM3545 tests ──────────────────────────────────────────────
+
+def _test_hioki(res: pyvisa.resources.Resource, resource_name: str) -> int:
+    """Run Hioki RM3545-specific tests. Returns number of failures."""
+    failures = 0
+    term = "\r\n"
+
+    # Apply serial framing (9600, 8N1)
+    try:
+        res.baud_rate    = 9600
+        res.data_bits    = 8
+        res.stop_bits    = visa_const.StopBits.one
+        res.parity       = visa_const.Parity.none
+        res.flow_control = visa_const.ControlFlow.none
+        res.read_termination  = term
+        res.write_termination = term
+    except Exception as exc:
+        print(f"  {_red('Could not set serial parameters')}: {exc}")
+        failures += 1
+
+    # --- Header OFF ----------------------------------------------------------
+    _step(":SYSTEM:HEADER OFF")
+    try:
+        res.write(":SYSTEM:HEADER OFF")
+        time.sleep(0.05)
+        _result(PASS)
+    except Exception as exc:
+        _result(FAIL, str(exc)); failures += 1
+
+    # --- IDN -----------------------------------------------------------------
+    _step("*IDN? response")
+    try:
+        idn = res.query("*IDN?").strip()
+        _result(PASS, idn)
+    except Exception as exc:
+        _result(FAIL, str(exc)); failures += 1
+
+    # --- Clear status --------------------------------------------------------
+    _step("*CLS (clear status registers)")
+    try:
+        res.write("*CLS")
+        time.sleep(0.05)
+        _result(PASS)
+    except Exception as exc:
+        _result(FAIL, str(exc)); failures += 1
+
+    # --- Configure single-shot -----------------------------------------------
+    _step(":INITIATE:CONTINUOUS OFF")
+    try:
+        res.write(":INITIATE:CONTINUOUS OFF")
+        time.sleep(0.05)
+        _result(PASS)
+    except Exception as exc:
+        _result(FAIL, str(exc)); failures += 1
+
+    # --- Auto range ----------------------------------------------------------
+    _step(":SENSE:RESISTANCE:RANGE:AUTO ON")
+    try:
+        res.write(":SENSE:RESISTANCE:RANGE:AUTO ON")
+        time.sleep(0.05)
+        _result(PASS)
+    except Exception as exc:
+        _result(FAIL, str(exc)); failures += 1
+
+    # --- Set speed MED -------------------------------------------------------
+    _step(":SAMPLE:RATE MED")
+    try:
+        res.write(":SAMPLE:RATE MED")
+        time.sleep(0.05)
+        _result(PASS)
+    except Exception as exc:
+        _result(FAIL, str(exc)); failures += 1
+
+    # --- READ? (single reading, extended timeout) ----------------------------
+    _step(":READ? (single resistance reading)")
+    orig_timeout = res.timeout
+    res.timeout = 15_000
+    try:
+        raw  = res.query(":READ?").strip()
+        fval = float(raw)
+        if fval >= 9.9e37:
+            _result(WARN, f"OL/overrange — is a DUT connected? (raw={raw})")
+        elif fval <= -9.9e37:
+            _result(WARN, f"UL/underrange (raw={raw})")
+        else:
+            _result(PASS, f"{fval:.6E} Ω")
+    except Exception as exc:
+        _result(FAIL, str(exc)); failures += 1
+    finally:
+        res.timeout = orig_timeout
+
+    # --- Check status registers ----------------------------------------------
+    _step("*ESR? (no error bits set)")
+    try:
+        esr = int(res.query("*ESR?").strip())
+        error_bits = {5: "CME", 4: "EXE", 3: "DDE", 2: "QYE"}
+        active = [name for bit, name in error_bits.items() if esr & (1 << bit)]
+        if active:
+            _result(WARN, f"ESR=0x{esr:02X}  bits set: {', '.join(active)}")
+        else:
+            _result(PASS, f"ESR=0x{esr:02X}")
+    except Exception as exc:
+        _result(FAIL, str(exc)); failures += 1
+
+    # --- Return to local -----------------------------------------------------
+    _step(":SYSTEM:LOCAL (return to local)")
+    try:
+        res.write(":SYSTEM:LOCAL")
+        _result(PASS)
+    except Exception as exc:
+        _result(WARN, str(exc))
+
+    return failures
+
+
 # ── generic probe (for unrecognised instruments) ─────────────────────────────
 
 def _test_generic(res: pyvisa.resources.Resource, resource_name: str) -> int:
@@ -327,6 +442,7 @@ _INSTRUMENT_TESTS = {
     "keysight": _test_keysight,
     "fluke":    _test_fluke,
     "yokogawa": _test_yokogawa,
+    "hioki":    _test_hioki,
 }
 
 _SIGNATURES = [
@@ -334,6 +450,7 @@ _SIGNATURES = [
     (["AGILENT"],   "keysight"),
     (["FLUKE"],     "fluke"),
     (["YOKOGAWA"],  "yokogawa"),
+    (["HIOKI"],     "hioki"),
 ]
 
 def _identify(idn: str) -> str:

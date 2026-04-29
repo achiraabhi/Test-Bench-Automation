@@ -13,6 +13,7 @@ Built for Raspberry Pi (Linux, Debian-based), Python 3.11, using the `pyvisa-py`
 | Keysight 344xxA DMM | Digital Multimeter | USB-TMC | `USB0::0x2A8D::0x0301::MY_SERIAL::INSTR` |
 | Fluke 8845A / 8846A | Digital Multimeter | RS-232 via USB adapter | `ASRL/dev/ttyUSB0::INSTR` |
 | Yokogawa WT310 / WT310E | Power Meter | USB-TMC | `USB0::0x0B21::0x0039::MY_SERIAL::INSTR` |
+| Hioki RM3544 / RM3545 | Resistance Meter | RS-232 / USB (virtual COM) | `ASRL/dev/ttyUSB1::INSTR` |
 
 ---
 
@@ -26,6 +27,7 @@ visacom/
 │   ├── keysight.py      # KeysightDMM driver
 │   ├── fluke.py         # Fluke8845A driver
 │   ├── yokogawa.py      # YokogawaWT310 driver
+│   ├── hioki.py         # HiokiRM3545 driver
 │   ├── manager.py       # InstrumentManager (multi-device orchestration)
 │   └── discover.py      # Automatic instrument discovery via *IDN?
 ├── example.py           # Two-DMM example with CSV logging
@@ -103,22 +105,23 @@ Timestamp                      Keysight (V_AC)    Fluke (V_AC)
 ```
 
 ### example2.py
-Works with any combination of instruments — Keysight, Fluke, and/or Yokogawa WT310.
-Prints 10 readings to the terminal, no CSV output.
+Works with any combination of instruments — Keysight, Fluke, Yokogawa WT310,
+and/or Hioki RM3545. Prints 10 readings to the terminal, no CSV output.
 
-Sample output (all three connected):
+Sample output (all four connected):
 ```
 Connected : Keysight   [USB0::0x2A8D::0x0301::MY123::INSTR]
 Connected : Fluke      [ASRL/dev/ttyUSB0::INSTR]
 Connected : Yokogawa   [USB0::0x0B21::0x0039::MY456::INSTR]
+Connected : Hioki      [ASRL/dev/ttyUSB1::INSTR]
 
-#     Keysight              Fluke
----------------------------------------------
-1     230.012345 V AC       230.009871 V AC
+#     Keysight                Fluke                   Hioki
+---------------------------------------------------------------
+1     230.012345 V AC         230.009871 V AC         1053.201234 Ω
 
-#        Voltage       Current         Power      Apparent      Reactive      PF        Freq
----------------------------------------------------------------------------------------------
-1     230.1230 V     1.2340 A     284.156 W     285.100 VA      12.345 var  0.9980    50.000 Hz
+#     [Yokogawa]    Voltage       Current         Power     Apparent      Reactive       PF        Freq
+------------------------------------------------------------------------------------------------------
+1                230.1230 V     1.2340 A     284.156 W   285.100 VA    12.345 var    0.9980    50.000 Hz
 ```
 
 ### diagnose.py
@@ -129,7 +132,7 @@ for each step and dumping the SCPI error queue.
 ```bash
 python diagnose.py               # test all discovered instruments
 python diagnose.py --list        # list available VISA resources only
-python diagnose.py "ASRL/dev/ttyUSB0::INSTR"   # test one specific resource
+python diagnose.py "ASRL/dev/ttyUSB1::INSTR"   # test one specific resource
 ```
 
 ---
@@ -137,32 +140,45 @@ python diagnose.py "ASRL/dev/ttyUSB0::INSTR"   # test one specific resource
 ## Usage in Your Own Code
 
 ```python
-from visacom import KeysightDMM, Fluke8845A, YokogawaWT310, InstrumentManager
+from visacom import KeysightDMM, Fluke8845A, YokogawaWT310, HiokiRM3545, InstrumentManager
 from visacom.discover import discover
 from pathlib import Path
 
 found = discover()
 
-# Connect to whichever instruments are available
+# ── Hioki RM3545 — resistance measurement ────────────────────────────────────
+hioki = HiokiRM3545(found["hioki"].resource_name)
+hioki.initialize(line_freq=50, speed="MED", auto_range=True)
+hioki.set_continuous(False)
+
+value = hioki.read()                     # blocks until measurement done
+print(f"Resistance: {value} Ω")
+
+# Pass/fail test
+hioki.configure_limits(upper=1100, lower=900, mode="ABS")
+hioki.enable_comparator(True)
+result   = hioki.read()
+judgment = hioki.get_judgment()          # "PASS" or "FAIL"
+print(f"{result} Ω  →  {judgment}")
+
+hioki.close()
+
+# ── Yokogawa WT310 — all power quantities in one call ────────────────────────
+yokogawa = YokogawaWT310(found["yokogawa"].resource_name)
+reading  = yokogawa.read_power()
+print(f"{reading.voltage_V:.3f} V  {reading.power_W:.3f} W  PF={reading.power_factor:.4f}")
+
+# ── DMMs — AC voltage with CSV logging ───────────────────────────────────────
 keysight = KeysightDMM(found["keysight"].resource_name)
 fluke    = Fluke8845A(found["fluke"].resource_name)
-yokogawa = YokogawaWT310(found["yokogawa"].resource_name)
 
-# Yokogawa — read all power quantities in one call
-reading = yokogawa.read_power()
-print(f"{reading.voltage_V:.3f} V  {reading.current_A:.4f} A  {reading.power_W:.3f} W")
-print(f"PF={reading.power_factor:.4f}  {reading.frequency_Hz:.3f} Hz")
-
-# DMMs — standard AC voltage
 with InstrumentManager(log_dir=Path("logs")) as mgr:
     mgr.add_instrument("keysight", keysight)
     mgr.add_instrument("fluke", fluke)
-
     mgr.configure_all(
         keysight=lambda inst: inst.configure_ac_voltage(),
         fluke=lambda inst:    inst.configure_ac_voltage(),
     )
-
     for row in mgr.read_loop(
         readers=dict(
             keysight=lambda inst: inst.read_ac_voltage(),
@@ -208,6 +224,44 @@ with InstrumentManager(log_dir=Path("logs")) as mgr:
 | `read_active_power()` | Active power (W) |
 | `read_power_factor()` | Power factor (0–1) |
 | `read_frequency()` | Supply frequency (Hz) |
+
+### Hioki RM3544 / RM3545 (RS-232 / USB)
+
+- Communication: RS-232C or USB virtual COM port, 9600 baud, 8N1.
+- Line termination: `\r\n` (CR+LF) on both TX and RX.
+- Call `initialize()` once after connecting to reset and configure the instrument.
+- **Non-standard SCPI** — uses Hioki-specific commands for several functions (see table below).
+- Over-range returns `"OL"`, under-range `"UL"`, measurement error `"ERROR"`.
+- The `+` sign in responses is returned as ASCII space — handled automatically.
+
+**Measurement methods:**
+
+| Method | SCPI command | Notes |
+|---|---|---|
+| `read()` | `:READ?` | Single-shot; blocks up to 15 s; instrument must be in `CONTINUOUS OFF` |
+| `fetch()` | `:FETCH?` | Returns last value without re-triggering; use in continuous mode |
+| `measure_resistance()` | `:MEASURE:RESISTANCE?` | One-liner; no prior setup needed |
+
+**Key non-standard commands vs SCPI:**
+
+| Hioki | Standard SCPI equivalent | Note |
+|---|---|---|
+| `:SAMPLE:RATE FAST\|MED\|SLOW\|SLOW2` | `:SENSE:APERTURE <n>` | Named speed instead of seconds |
+| `:ADJUST` | `:CALIBRATION:ZERO` | Zero adjustment |
+| `:CALCULATE:LIMIT:RESULT?` | `:CALCULATE:LIMIT:FAIL?` | Returns `IN`/`HI`/`LO` |
+| `:CALCULATE:LIMIT:JUDGE?` | `:CALCULATE:LIMIT:FAIL?` | Returns `PASS`/`FAIL` |
+| `:MEMORY` | `:TRACE` | Internal memory storage |
+| `:SENSE:SCAN:...` | `:ROUTE:SCAN:...` | Multiplexer scan commands |
+| Two ESRs (`:ESR0?`, `:ESR1?`) | Single `*ESR?` | Extended status model |
+
+**Speed / integration time:**
+
+| Speed | Period | Use case |
+|---|---|---|
+| `FAST` | 100 ms | High-speed scanning |
+| `MED` | 300 ms | Default — general use |
+| `SLOW` | 1 s | Higher accuracy |
+| `SLOW2` | 2 s | Best accuracy (RM3545 only) |
 
 ---
 
@@ -438,7 +492,7 @@ You should see `plugdev` in the list.
 
 ---
 
-### 5. For RS-232 / Serial Instruments (Fluke 8845A)
+### 5. For RS-232 / Serial Instruments (Fluke 8845A, Hioki RM3545)
 
 Serial-over-USB adapters (`/dev/ttyUSB0`) use a different group — `dialout`:
 
@@ -507,6 +561,10 @@ ls -l /dev/ttyUSB0
 
 - **This guide applies to all USB-TMC instruments**, not just the Yokogawa.
   The same steps work for the Keysight DMM — just swap in its Vendor/Product ID.
+
+- **Hioki RS-232 / USB virtual COM.** The Hioki RM3545 connects via a USB
+  virtual COM port — it appears as `/dev/ttyUSB*`, not as a USB-TMC device.
+  Use the `dialout` group fix (Section 5), not the udev rule.
 
 ---
 
