@@ -1,43 +1,29 @@
-# visacom Dashboard
+# visacom Desktop Dashboard
 
-Real-time web dashboard for the visacom instrument framework.
+Native Tkinter dashboard for the visacom instrument framework.
 
 ## Stack
 
-- **Backend** — FastAPI + WebSocket (streaming readings to all connected browsers)
-- **Frontend** — Plain HTML / Bootstrap 5 / Chart.js (no build step, single file)
+- Python standard-library Tkinter UI
+- Background worker threads for scan and measurement loops
+- PyVISA / pyvisa-py for instrument communication
 
 ## Run
 
 ```bash
 pip install -r requirements.txt
-python ui_server.py                            # http://0.0.0.0:8080
-python ui_server.py --host 127.0.0.1 --port 5000
+python ui_server.py
 ```
 
-Open `http://localhost:8080` locally, or `http://<raspberry-pi-ip>:8080` from any device on the network.
+Click **Scan** to discover instruments, **Start** to stream live readings, and **CSV** to export readings from the current session.
 
 ## Features
 
-- **Auto-discovery** — Scan button probes all VISA resources via `*IDN?`
-- **Live readings** — WebSocket pushes every measurement to all open browser tabs instantly
-- **Measurement selection** — Per-instrument dropdown to switch AC Voltage / DC Voltage / Resistance
-- **History chart** — Rolling line chart of the last 100 readings per instrument
-- **Yokogawa panel** — Full 7-quantity power display (V, I, W, VA, var, PF, Hz)
-- **Data log** — Scrollable timestamped table of all readings in the session
-- **CSV export** — One-click download of all readings from the current session
-- **Adjustable interval** — Slider from 0.5 s to 30 s
-- **Multi-browser** — Any number of browser tabs can connect simultaneously
-
-## API Endpoints
-
-| Method | Path                          | Description                        |
-|--------|-------------------------------|------------------------------------|
-| GET    | `/api/scan`                   | Discover and connect all instruments |
-| POST   | `/api/start`                  | Start measurement loop             |
-| POST   | `/api/stop`                   | Stop measurement loop              |
-| POST   | `/api/interval/{seconds}`     | Set measurement interval           |
-| POST   | `/api/measure/{label}/{type}` | Change measurement type            |
-| GET    | `/api/export`                 | Download readings as CSV           |
-| POST   | `/api/clear`                  | Clear reading history              |
-| WS     | `/ws`                         | WebSocket — real-time readings     |
+- Auto-discovery of supported VISA instruments via `*IDN?`
+- Native desktop controls; no browser or web server required
+- Measurement selection for supported DMM modes
+- Live reading cards for connected instruments
+- Yokogawa 7-quantity power display
+- Scrollable timestamped data log
+- CSV export
+- Adjustable measurement interval from 0.5 s to 30 s
