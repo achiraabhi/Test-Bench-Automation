@@ -786,18 +786,10 @@ class VisacomTkApp(tk.Tk):
         has_instruments = bool(self.instruments)
         selection = self.instrument_tree.selection()
         can_disconnect = bool(selection and selection[0] in self.instruments and not self.scanning)
-        can_reconnect = bool(
-            selection
-            and selection[0] in self.discovered
-            and selection[0] not in self.instruments
-            and selection[0] not in self.reconnecting
-            and not self.scanning
-        )
         self.scan_btn.configure(state=tk.DISABLED if self.scanning else tk.NORMAL)
         self.start_btn.configure(state=tk.NORMAL if has_instruments and not self.running and not self.scanning else tk.DISABLED)
         self.stop_btn.configure(state=tk.NORMAL if self.running else tk.DISABLED)
         self.disconnect_btn.configure(state=tk.NORMAL if can_disconnect else tk.DISABLED)
-        self.reconnect_btn.configure(state=tk.NORMAL if can_reconnect else tk.DISABLED)
         self.state_label.configure(text="Running" if self.running else "Stopped")
 
     def _set_detail_text(self, text: str) -> None:
