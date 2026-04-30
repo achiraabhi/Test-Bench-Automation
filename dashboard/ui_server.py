@@ -16,7 +16,7 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 # Allow importing the visacom package from the sibling instruments/ directory.
 sys.path.insert(0, str(Path(__file__).parent.parent / "instruments"))
@@ -112,6 +112,25 @@ def configure_for_measurement(inst: Any, base: str, mtype: str) -> None:
             inst.configure_ac_voltage()
 
 
+def connect_instrument(disc: DiscoveredInstrument, measurement: str = "") -> Any:
+    if disc.label == "keysight":
+        inst = KeysightDMM(disc.resource_name, timeout_ms=5_000)
+        configure_for_measurement(inst, disc.label, measurement or DEFAULT_MEASURE[disc.label])
+    elif disc.label == "fluke":
+        inst = Fluke8845A(disc.resource_name, timeout_ms=10_000)
+        configure_for_measurement(inst, disc.label, measurement or DEFAULT_MEASURE[disc.label])
+    elif disc.label == "yokogawa":
+        inst = YokogawaWT310(disc.resource_name, timeout_ms=10_000)
+        inst.configure_auto_range()
+    elif disc.label == "hioki":
+        inst = HiokiRM3545(disc.resource_name, timeout_ms=15_000)
+        inst.initialize(line_freq=50, speed="MED", auto_range=True)
+        inst.set_continuous(False)
+    else:
+        raise ValueError(f"Unsupported instrument type: {disc.label}")
+    return inst
+
+
 def do_reading(label: str, inst: Any, base: str, mtype: str) -> Optional[dict]:
     """Blocking VISA read. Called from the measurement worker thread."""
     ts = datetime.now().isoformat(timespec="milliseconds")
@@ -196,6 +215,7 @@ class VisacomTkApp(tk.Tk):
         self.measure_thread: Optional[threading.Thread] = None
         self.live_vars: Dict[str, Dict[str, tk.StringVar]] = {}
         self.instrument_locks: Dict[str, threading.RLock] = {}
+        self.reconnecting: Set[str] = set()
         self.logo_image: Optional[tk.PhotoImage] = self._load_logo()
 
         self._configure_style()
@@ -318,7 +338,9 @@ class VisacomTkApp(tk.Tk):
         self.measure_combo.pack(fill=tk.X, pady=(4, 8))
         self.measure_combo.bind("<<ComboboxSelected>>", self._on_measure_change)
         self.disconnect_btn = ttk.Button(sidebar, text="Disconnect Selected", style="Red.TButton", command=self.disconnect_selected)
-        self.disconnect_btn.pack(fill=tk.X, pady=(0, 12))
+        self.disconnect_btn.pack(fill=tk.X, pady=(0, 8))
+        self.reconnect_btn = ttk.Button(sidebar, text="Reconnect Selected", style="Green.TButton", command=self.reconnect_selected)
+        self.reconnect_btn.pack(fill=tk.X, pady=(0, 12))
 
         self.detail_text = tk.Text(
             sidebar,
@@ -396,23 +418,9 @@ class VisacomTkApp(tk.Tk):
 
         for label, disc in found.items():
             try:
-                if disc.label == "keysight":
-                    inst = KeysightDMM(disc.resource_name, timeout_ms=5_000)
-                    inst.configure_ac_voltage()
-                elif disc.label == "fluke":
-                    inst = Fluke8845A(disc.resource_name, timeout_ms=10_000)
-                    inst.configure_ac_voltage()
-                elif disc.label == "yokogawa":
-                    inst = YokogawaWT310(disc.resource_name, timeout_ms=10_000)
-                    inst.configure_auto_range()
-                elif disc.label == "hioki":
-                    inst = HiokiRM3545(disc.resource_name, timeout_ms=15_000)
-                    inst.initialize(line_freq=50, speed="MED", auto_range=True)
-                    inst.set_continuous(False)
-                else:
-                    continue
+                measurement = measurements.setdefault(label, DEFAULT_MEASURE.get(disc.label, ""))
+                inst = connect_instrument(disc, measurement)
                 connected[label] = inst
-                measurements.setdefault(label, DEFAULT_MEASURE.get(disc.label, ""))
             except Exception as exc:
                 logger.warning("Connect failed [%s]: %s", label, exc)
 
@@ -447,6 +455,13 @@ class VisacomTkApp(tk.Tk):
             return
         self.disconnect_instrument(selection[0])
 
+    def reconnect_selected(self) -> None:
+        selection = self.instrument_tree.selection()
+        if not selection:
+            self._set_status("Select a disconnected instrument to reconnect.", "warn")
+            return
+        self.reconnect_instrument(selection[0])
+
     def disconnect_instrument(self, label: str) -> None:
         if label not in self.instruments:
             self._set_status(f"{display_name(label)} is already disconnected.", "warn")
@@ -468,6 +483,30 @@ class VisacomTkApp(tk.Tk):
         if was_running and self.instruments:
             self.start()
         self._refresh_buttons()
+
+    def reconnect_instrument(self, label: str) -> None:
+        if label in self.instruments:
+            self._set_status(f"{display_name(label)} is already connected.", "warn")
+            return
+        if label not in self.discovered:
+            self._set_status("Run Scan before reconnecting this instrument.", "warn")
+            return
+        if label in self.reconnecting:
+            self._set_status(f"{display_name(label)} is already reconnecting.", "warn")
+            return
+        self.reconnecting.add(label)
+        self._set_status(f"Reconnecting {display_name(label)}...", "info")
+        self._refresh_buttons()
+        threading.Thread(target=self._reconnect_worker, args=(label,), daemon=True).start()
+
+    def _reconnect_worker(self, label: str) -> None:
+        disc = self.discovered[label]
+        measurement = self.measurements.setdefault(label, DEFAULT_MEASURE.get(disc.label, ""))
+        try:
+            inst = connect_instrument(disc, measurement)
+            self.events.put(("reconnect_done", label, inst, None))
+        except Exception as exc:
+            self.events.put(("reconnect_done", label, None, str(exc)))
 
     def _measure_loop(self) -> None:
         while not self.stop_event.is_set():
@@ -529,9 +568,24 @@ class VisacomTkApp(tk.Tk):
                     self._append_reading(event[1])
                 elif event[0] == "measure_configured":
                     self._set_status(f"{display_name(event[1])} set to {event[2]}.", "info")
+                elif event[0] == "reconnect_done":
+                    self._apply_reconnect_result(event[1], event[2], event[3])
         except queue.Empty:
             pass
         self.after(100, self._process_events)
+
+    def _apply_reconnect_result(self, label: str, inst: Any, error: Optional[str]) -> None:
+        self.reconnecting.discard(label)
+        if error:
+            self._set_status(f"Reconnect failed for {display_name(label)}: {error}", "error")
+            self._refresh_buttons()
+            return
+        self.instruments[label] = inst
+        self.instrument_locks.setdefault(label, threading.RLock())
+        self._refresh_instruments()
+        self._build_live_cards()
+        self._set_status(f"Reconnected {display_name(label)}.", "info")
+        self._refresh_buttons()
 
     def _apply_scan_results(
         self,
@@ -732,10 +786,18 @@ class VisacomTkApp(tk.Tk):
         has_instruments = bool(self.instruments)
         selection = self.instrument_tree.selection()
         can_disconnect = bool(selection and selection[0] in self.instruments and not self.scanning)
+        can_reconnect = bool(
+            selection
+            and selection[0] in self.discovered
+            and selection[0] not in self.instruments
+            and selection[0] not in self.reconnecting
+            and not self.scanning
+        )
         self.scan_btn.configure(state=tk.DISABLED if self.scanning else tk.NORMAL)
         self.start_btn.configure(state=tk.NORMAL if has_instruments and not self.running and not self.scanning else tk.DISABLED)
         self.stop_btn.configure(state=tk.NORMAL if self.running else tk.DISABLED)
         self.disconnect_btn.configure(state=tk.NORMAL if can_disconnect else tk.DISABLED)
+        self.reconnect_btn.configure(state=tk.NORMAL if can_reconnect else tk.DISABLED)
         self.state_label.configure(text="Running" if self.running else "Stopped")
 
     def _set_detail_text(self, text: str) -> None:

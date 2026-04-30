@@ -6,7 +6,8 @@ Resource string example: ASRL/dev/ttyUSB0::INSTR
 
 Key behavioral notes:
   - Must send SYST:REM before issuing any measurement commands.
-  - Uses READ? (atomic arm+measure+fetch) rather than INIT/FETCH?.
+  - Uses Fluke SCPI function/range commands rather than the Keysight trigger workflow.
+  - Uses MEASure? queries for one-shot readings.
   - Serial framing: 9600 8N1.
   - Line termination: CR+LF (\r\n).
 """
@@ -103,8 +104,10 @@ class Fluke8845A(Instrument):
             voltage_range: '0.1', '1', '10', '100', '750', or 'AUTO'.
             resolution:    Digits of resolution ('DEF', '4.5', '5.5', '6.5').
         """
-        cmd = f"CONF:VOLT:AC {voltage_range},{resolution}"
-        self.write(cmd)
+        self._enter_remote()
+        self.write('FUNC "VOLT:AC"')
+        self._set_range("VOLT:AC", voltage_range)
+        self._set_resolution("VOLT:AC", resolution)
         logger.info(
             "Fluke [%s] configured for AC voltage (%s V, res=%s)",
             self.resource_name, voltage_range, resolution,
@@ -115,8 +118,10 @@ class Fluke8845A(Instrument):
         voltage_range: str = "AUTO",
         resolution: str = "DEF",
     ) -> None:
-        cmd = f"CONF:VOLT:DC {voltage_range},{resolution}"
-        self.write(cmd)
+        self._enter_remote()
+        self.write('FUNC "VOLT:DC"')
+        self._set_range("VOLT:DC", voltage_range)
+        self._set_resolution("VOLT:DC", resolution)
         logger.info(
             "Fluke [%s] configured for DC voltage (%s V, res=%s)",
             self.resource_name, voltage_range, resolution,
@@ -127,12 +132,25 @@ class Fluke8845A(Instrument):
         resistance_range: str = "AUTO",
         resolution: str = "DEF",
     ) -> None:
-        cmd = f"CONF:RES {resistance_range},{resolution}"
-        self.write(cmd)
+        self._enter_remote()
+        self.write('FUNC "RES"')
+        self._set_range("RES", resistance_range)
+        self._set_resolution("RES", resolution)
         logger.info(
             "Fluke [%s] configured for resistance (%s Ω)",
             self.resource_name, resistance_range,
         )
+
+    def _set_range(self, function: str, value: str) -> None:
+        if str(value).upper() == "AUTO":
+            self.write(f"{function}:RANG:AUTO ON")
+        else:
+            self.write(f"{function}:RANG {value}")
+
+    def _set_resolution(self, function: str, value: str) -> None:
+        if str(value).upper() == "DEF":
+            return
+        self.write(f"{function}:RES {value}")
 
     # ------------------------------------------------------------------
     # Measurement acquisition
@@ -142,25 +160,28 @@ class Fluke8845A(Instrument):
         """
         Return the AC voltage reading (V RMS).
 
-        READ? is the correct command for the 8845A: it arms the trigger,
-        waits for the measurement to complete, and returns the reading in
-        a single transaction.  Do NOT use INIT + FETCH? on this instrument.
+        MEAS:VOLT:AC? configures and triggers the Fluke in one command.
+        This keeps callers with the same Python API as Keysight while using
+        the Fluke-specific SCPI measurement command.
         """
-        raw = self.query_with_retry("READ?")
+        self._enter_remote()
+        raw = self.query_with_retry("MEAS:VOLT:AC?")
         value = float(raw)
         logger.debug("Fluke AC voltage: %.6f V", value)
         return value
 
     def read_dc_voltage(self) -> float:
         """Return the DC voltage reading (V)."""
-        raw = self.query_with_retry("READ?")
+        self._enter_remote()
+        raw = self.query_with_retry("MEAS:VOLT:DC?")
         value = float(raw)
         logger.debug("Fluke DC voltage: %.6f V", value)
         return value
 
     def read_resistance(self) -> float:
         """Return the resistance reading (Ω)."""
-        raw = self.query_with_retry("READ?")
+        self._enter_remote()
+        raw = self.query_with_retry("MEAS:RES?")
         value = float(raw)
         logger.debug("Fluke resistance: %.6f Ω", value)
         return value
