@@ -24,11 +24,14 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r instruments/requirements.txt
+          pip install -r dashboard/requirements.txt
           pip install ruff mypy
 
       - name: Lint with ruff
-        run: ruff check visacom/ example.py example2.py diagnose.py
+        run: |
+          ruff check instruments/visacom/ instruments/example.py instruments/example2.py instruments/diagnose.py
+          ruff check dashboard/ui_server.py
 
       - name: Type-check with mypy
-        run: mypy visacom/ --ignore-missing-imports
+        run: mypy instruments/visacom/ --ignore-missing-imports
