@@ -49,7 +49,7 @@ pip install -r requirements.txt
 python ui_server.py
 ```
 
-Click **Scan** to discover instruments and **Start** to stream live readings.
+Click **Scan** to discover instruments and **Start** to stream live readings. Connected instruments can be disconnected individually from the dashboard.
 
 ## License
 

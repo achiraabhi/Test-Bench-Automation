@@ -21,7 +21,9 @@ Click **Scan** to discover instruments, **Start** to stream live readings, and *
 
 - Auto-discovery of supported VISA instruments via `*IDN?`
 - Native desktop controls; no browser or web server required
+- Noratel logo branding in the desktop header
 - Measurement selection for supported DMM modes
+- Per-instrument disconnect from the sidebar or live card
 - Live reading cards for connected instruments
 - Yokogawa 7-quantity power display
 - Scrollable timestamped data log

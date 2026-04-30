@@ -48,6 +48,22 @@ DISPLAY_NAMES = {
     "hioki": "Hioki RM3545",
 }
 
+APP_DIR = Path(__file__).parent
+LOGO_PATH = APP_DIR / "static" / "noratel-logo.png"
+COLORS = {
+    "bg": "#0f131a",
+    "panel": "#171d26",
+    "card": "#1d2633",
+    "card2": "#131922",
+    "border": "#2d3645",
+    "text": "#eef3f8",
+    "muted": "#9ba7b6",
+    "accent": "#2f9df4",
+    "green": "#34c759",
+    "yellow": "#f6c343",
+    "red": "#ff5c5c",
+}
+
 
 def display_name(label: str) -> str:
     base = label.rsplit("_", 1)[0] if label.rsplit("_", 1)[-1].isdigit() else label
@@ -81,13 +97,28 @@ def short_time(ts: str) -> str:
     return (ts.split("T")[1] if "T" in ts else ts)[:12]
 
 
+def configure_for_measurement(inst: Any, base: str, mtype: str) -> None:
+    if base == "fluke":
+        enter_remote = getattr(inst, "_enter_remote", None)
+        if callable(enter_remote):
+            enter_remote()
+
+    if base in ("keysight", "fluke"):
+        if mtype == "DC Voltage":
+            inst.configure_dc_voltage()
+        elif mtype == "Resistance":
+            inst.configure_resistance()
+        else:
+            inst.configure_ac_voltage()
+
+
 def do_reading(label: str, inst: Any, base: str, mtype: str) -> Optional[dict]:
     """Blocking VISA read. Called from the measurement worker thread."""
     ts = datetime.now().isoformat(timespec="milliseconds")
     try:
         if base in ("keysight", "fluke"):
+            configure_for_measurement(inst, base, mtype)
             if mtype == "DC Voltage":
-                inst.configure_dc_voltage()
                 return {
                     "ts": ts,
                     "label": label,
@@ -96,7 +127,6 @@ def do_reading(label: str, inst: Any, base: str, mtype: str) -> Optional[dict]:
                     "unit": "V DC",
                 }
             if mtype == "Resistance":
-                inst.configure_resistance()
                 return {
                     "ts": ts,
                     "label": label,
@@ -104,7 +134,6 @@ def do_reading(label: str, inst: Any, base: str, mtype: str) -> Optional[dict]:
                     "value": inst.read_resistance(),
                     "unit": "Ohm",
                 }
-            inst.configure_ac_voltage()
             return {
                 "ts": ts,
                 "label": label,
@@ -149,8 +178,8 @@ class VisacomTkApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("Autobench")
-        self.geometry("1120x720")
-        self.minsize(900, 560)
+        self.geometry("1180x740")
+        self.minsize(960, 600)
 
         self.discovered: Dict[str, DiscoveredInstrument] = {}
         self.instruments: Dict[str, Any] = {}
@@ -166,6 +195,8 @@ class VisacomTkApp(tk.Tk):
         self.stop_event = threading.Event()
         self.measure_thread: Optional[threading.Thread] = None
         self.live_vars: Dict[str, Dict[str, tk.StringVar]] = {}
+        self.instrument_locks: Dict[str, threading.RLock] = {}
+        self.logo_image: Optional[tk.PhotoImage] = self._load_logo()
 
         self._configure_style()
         self._build_ui()
@@ -174,34 +205,72 @@ class VisacomTkApp(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _configure_style(self) -> None:
-        self.configure(bg="#0d1117")
+        self.configure(bg=COLORS["bg"])
         style = ttk.Style(self)
         style.theme_use("clam")
         style.configure(".", font=("Segoe UI", 10))
-        style.configure("TFrame", background="#0d1117")
-        style.configure("Panel.TFrame", background="#161b22")
-        style.configure("TLabel", background="#0d1117", foreground="#e6edf3")
-        style.configure("Panel.TLabel", background="#161b22", foreground="#e6edf3")
-        style.configure("Muted.TLabel", background="#161b22", foreground="#8b949e")
-        style.configure("Value.TLabel", background="#161b22", foreground="#e6edf3", font=("Consolas", 20, "bold"))
-        style.configure("Accent.TButton", foreground="#388bfd")
-        style.configure("Green.TButton", foreground="#3fb950")
-        style.configure("Red.TButton", foreground="#f85149")
-        style.configure("Treeview", background="#0d1117", fieldbackground="#0d1117", foreground="#e6edf3")
-        style.configure("Treeview.Heading", background="#161b22", foreground="#8b949e")
+        style.configure("TFrame", background=COLORS["bg"])
+        style.configure("Header.TFrame", background=COLORS["panel"])
+        style.configure("Panel.TFrame", background=COLORS["panel"])
+        style.configure("Card.TFrame", background=COLORS["card"])
+        style.configure("TLabel", background=COLORS["bg"], foreground=COLORS["text"])
+        style.configure("Header.TLabel", background=COLORS["panel"], foreground=COLORS["text"])
+        style.configure("Panel.TLabel", background=COLORS["panel"], foreground=COLORS["text"])
+        style.configure("Card.TLabel", background=COLORS["card"], foreground=COLORS["text"])
+        style.configure("Muted.TLabel", background=COLORS["panel"], foreground=COLORS["muted"])
+        style.configure("CardMuted.TLabel", background=COLORS["card"], foreground=COLORS["muted"])
+        style.configure("Value.TLabel", background=COLORS["card"], foreground=COLORS["text"], font=("Consolas", 22, "bold"))
+        style.configure("TButton", background=COLORS["card2"], foreground=COLORS["text"], bordercolor=COLORS["border"], padding=(11, 6))
+        style.map("TButton", background=[("active", COLORS["card"]), ("disabled", COLORS["panel"])])
+        style.configure("Accent.TButton", background=COLORS["accent"], foreground="#ffffff", bordercolor=COLORS["accent"])
+        style.configure("Green.TButton", background="#173c25", foreground=COLORS["green"], bordercolor="#245f38")
+        style.configure("Red.TButton", background="#3b1b1f", foreground=COLORS["red"], bordercolor="#693037")
+        style.configure("Ghost.TButton", background=COLORS["panel"], foreground=COLORS["muted"], bordercolor=COLORS["border"])
+        style.configure(
+            "Treeview",
+            background=COLORS["card2"],
+            fieldbackground=COLORS["card2"],
+            foreground=COLORS["text"],
+            bordercolor=COLORS["border"],
+            rowheight=30,
+        )
+        style.configure("Treeview.Heading", background=COLORS["panel"], foreground=COLORS["muted"], relief=tk.FLAT)
+        style.map("Treeview", background=[("selected", "#1d5f91")], foreground=[("selected", "#ffffff")])
+        style.configure("TCombobox", fieldbackground=COLORS["card2"], background=COLORS["card2"], foreground=COLORS["text"])
+
+    def _load_logo(self) -> Optional[tk.PhotoImage]:
+        if not LOGO_PATH.exists():
+            return None
+        try:
+            image = tk.PhotoImage(file=str(LOGO_PATH))
+            width = image.width()
+            if width > 190:
+                image = image.subsample(max(1, width // 170))
+            return image
+        except tk.TclError:
+            return None
 
     def _build_ui(self) -> None:
-        toolbar = ttk.Frame(self, style="Panel.TFrame", padding=(12, 8))
+        toolbar = ttk.Frame(self, style="Header.TFrame", padding=(16, 10))
         toolbar.pack(fill=tk.X)
 
-        ttk.Label(toolbar, text="Autobench", style="Panel.TLabel", font=("Segoe UI", 13, "bold")).pack(side=tk.LEFT)
-        ttk.Button(toolbar, text="Scan", style="Accent.TButton", command=self.scan).pack(side=tk.LEFT, padx=(16, 6))
+        brand = ttk.Frame(toolbar, style="Header.TFrame")
+        brand.pack(side=tk.LEFT, padx=(0, 18))
+        if self.logo_image is not None:
+            ttk.Label(brand, image=self.logo_image, style="Header.TLabel").pack(side=tk.LEFT, padx=(0, 12))
+        wordmark = ttk.Frame(brand, style="Header.TFrame")
+        wordmark.pack(side=tk.LEFT)
+        ttk.Label(wordmark, text="AUTOBENCH", style="Header.TLabel", font=("Segoe UI", 15, "bold")).pack(anchor=tk.W)
+        ttk.Label(wordmark, text="Noratel instrument dashboard", style="Header.TLabel", foreground=COLORS["muted"], font=("Segoe UI", 9)).pack(anchor=tk.W)
+
+        self.scan_btn = ttk.Button(toolbar, text="Scan", style="Accent.TButton", command=self.scan)
+        self.scan_btn.pack(side=tk.LEFT, padx=(0, 6))
         self.start_btn = ttk.Button(toolbar, text="Start", style="Green.TButton", command=self.start)
         self.start_btn.pack(side=tk.LEFT, padx=6)
         self.stop_btn = ttk.Button(toolbar, text="Stop", style="Red.TButton", command=self.stop)
         self.stop_btn.pack(side=tk.LEFT, padx=6)
 
-        ttk.Label(toolbar, text="Interval", style="Panel.TLabel").pack(side=tk.LEFT, padx=(18, 6))
+        ttk.Label(toolbar, text="Interval", style="Header.TLabel").pack(side=tk.LEFT, padx=(18, 6))
         self.interval_scale = ttk.Scale(
             toolbar,
             from_=0.5,
@@ -212,20 +281,20 @@ class VisacomTkApp(tk.Tk):
             command=lambda _value: self._refresh_interval_label(),
         )
         self.interval_scale.pack(side=tk.LEFT)
-        self.interval_label = ttk.Label(toolbar, text="2.0 s", style="Panel.TLabel", width=7)
+        self.interval_label = ttk.Label(toolbar, text="2.0 s", style="Header.TLabel", width=7)
         self.interval_label.pack(side=tk.LEFT, padx=(5, 14))
 
         ttk.Button(toolbar, text="CSV", command=self.export_csv).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(toolbar, text="Clear", command=self.clear_readings).pack(side=tk.RIGHT)
 
-        body = ttk.Frame(self)
+        body = ttk.Frame(self, padding=(14, 14, 14, 12))
         body.pack(fill=tk.BOTH, expand=True)
 
-        sidebar = ttk.Frame(body, style="Panel.TFrame", padding=10, width=330)
+        sidebar = ttk.Frame(body, style="Panel.TFrame", padding=14, width=350)
         sidebar.pack(side=tk.LEFT, fill=tk.Y)
         sidebar.pack_propagate(False)
 
-        ttk.Label(sidebar, text="Instruments", style="Panel.TLabel", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W)
+        ttk.Label(sidebar, text="Instruments", style="Panel.TLabel", font=("Segoe UI", 12, "bold")).pack(anchor=tk.W)
         self.instrument_tree = ttk.Treeview(
             sidebar,
             columns=("status", "measure"),
@@ -239,21 +308,25 @@ class VisacomTkApp(tk.Tk):
         self.instrument_tree.column("#0", width=145)
         self.instrument_tree.column("status", width=80, anchor=tk.CENTER)
         self.instrument_tree.column("measure", width=90)
-        self.instrument_tree.pack(fill=tk.BOTH, expand=True, pady=(8, 10))
+        self.instrument_tree.tag_configure("connected", foreground=COLORS["green"])
+        self.instrument_tree.tag_configure("failed", foreground=COLORS["red"])
+        self.instrument_tree.pack(fill=tk.BOTH, expand=True, pady=(10, 12))
         self.instrument_tree.bind("<<TreeviewSelect>>", self._on_instrument_select)
 
         ttk.Label(sidebar, text="Measurement", style="Muted.TLabel").pack(anchor=tk.W)
         self.measure_combo = ttk.Combobox(sidebar, textvariable=self.selected_measure, state="readonly")
-        self.measure_combo.pack(fill=tk.X, pady=(4, 12))
+        self.measure_combo.pack(fill=tk.X, pady=(4, 8))
         self.measure_combo.bind("<<ComboboxSelected>>", self._on_measure_change)
+        self.disconnect_btn = ttk.Button(sidebar, text="Disconnect Selected", style="Red.TButton", command=self.disconnect_selected)
+        self.disconnect_btn.pack(fill=tk.X, pady=(0, 12))
 
         self.detail_text = tk.Text(
             sidebar,
             height=7,
             wrap=tk.WORD,
-            bg="#0d1117",
-            fg="#8b949e",
-            insertbackground="#e6edf3",
+            bg=COLORS["card2"],
+            fg=COLORS["muted"],
+            insertbackground=COLORS["text"],
             relief=tk.FLAT,
             padx=8,
             pady=8,
@@ -262,16 +335,22 @@ class VisacomTkApp(tk.Tk):
         self.detail_text.insert("1.0", "Select an instrument to see IDN and resource details.")
         self.detail_text.configure(state=tk.DISABLED)
 
-        content = ttk.Frame(body, padding=12)
+        content = ttk.Frame(body, padding=(16, 0, 0, 0))
         content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        ttk.Label(content, text="Live Readings", font=("Segoe UI", 11, "bold")).pack(anchor=tk.W)
+        summary = ttk.Frame(content, style="Card.TFrame", padding=14)
+        summary.pack(fill=tk.X, pady=(0, 14))
+        ttk.Label(summary, text="Live Bench", style="Card.TLabel", font=("Segoe UI", 15, "bold")).pack(side=tk.LEFT)
+        self.summary_label = ttk.Label(summary, text="0 connected", style="CardMuted.TLabel")
+        self.summary_label.pack(side=tk.RIGHT)
+
+        ttk.Label(content, text="Live Readings", font=("Segoe UI", 12, "bold")).pack(anchor=tk.W)
         self.live_frame = ttk.Frame(content)
         self.live_frame.pack(fill=tk.X, pady=(8, 14))
 
         log_head = ttk.Frame(content)
         log_head.pack(fill=tk.X)
-        ttk.Label(log_head, text="Data Log", font=("Segoe UI", 11, "bold")).pack(side=tk.LEFT)
+        ttk.Label(log_head, text="Data Log", font=("Segoe UI", 12, "bold")).pack(side=tk.LEFT)
         self.read_count = ttk.Label(log_head, text="0 readings")
         self.read_count.pack(side=tk.RIGHT)
 
@@ -291,7 +370,7 @@ class VisacomTkApp(tk.Tk):
             self.log_tree.column(col, width=width, anchor=tk.W)
         self.log_tree.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
 
-        statusbar = ttk.Frame(self, style="Panel.TFrame", padding=(12, 5))
+        statusbar = ttk.Frame(self, style="Panel.TFrame", padding=(14, 7))
         statusbar.pack(fill=tk.X)
         self.status_label = ttk.Label(statusbar, text="", style="Muted.TLabel")
         self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
@@ -361,6 +440,35 @@ class VisacomTkApp(tk.Tk):
         self._set_status("Measurement stopped.", "info")
         self._refresh_buttons()
 
+    def disconnect_selected(self) -> None:
+        selection = self.instrument_tree.selection()
+        if not selection:
+            self._set_status("Select an instrument to disconnect.", "warn")
+            return
+        self.disconnect_instrument(selection[0])
+
+    def disconnect_instrument(self, label: str) -> None:
+        if label not in self.instruments:
+            self._set_status(f"{display_name(label)} is already disconnected.", "warn")
+            return
+        was_running = self.running
+        self.stop()
+        self._wait_for_measure_thread()
+
+        inst = self.instruments.pop(label, None)
+        if inst is not None:
+            try:
+                inst.close()
+            except Exception as exc:
+                logger.warning("Disconnect failed [%s]: %s", label, exc)
+
+        self._refresh_instruments()
+        self._build_live_cards()
+        self._set_status(f"Disconnected {display_name(label)}.", "info")
+        if was_running and self.instruments:
+            self.start()
+        self._refresh_buttons()
+
     def _measure_loop(self) -> None:
         while not self.stop_event.is_set():
             cycle_started = time.monotonic()
@@ -371,7 +479,9 @@ class VisacomTkApp(tk.Tk):
                 if disc is None:
                     continue
                 mtype = self.measurements.get(label, DEFAULT_MEASURE.get(disc.label, ""))
-                reading = do_reading(label, inst, disc.label, mtype)
+                lock = self.instrument_locks.setdefault(label, threading.RLock())
+                with lock:
+                    reading = do_reading(label, inst, disc.label, mtype)
                 if reading:
                     self.events.put(("reading", reading))
 
@@ -417,6 +527,8 @@ class VisacomTkApp(tk.Tk):
                     self._apply_scan_results(event[1], event[2], event[3])
                 elif event[0] == "reading":
                     self._append_reading(event[1])
+                elif event[0] == "measure_configured":
+                    self._set_status(f"{display_name(event[1])} set to {event[2]}.", "info")
         except queue.Empty:
             pass
         self.after(100, self._process_events)
@@ -430,6 +542,7 @@ class VisacomTkApp(tk.Tk):
         self.discovered = found
         self.instruments = connected
         self.measurements = measurements
+        self.instrument_locks = {label: threading.RLock() for label in found}
         self.scanning = False
         self._refresh_instruments()
         self._build_live_cards()
@@ -498,7 +611,7 @@ class VisacomTkApp(tk.Tk):
         for item in self.instrument_tree.get_children():
             self.instrument_tree.delete(item)
         for label, disc in self.discovered.items():
-            connected = "Connected" if label in self.instruments else "Failed"
+            connected = "Connected" if label in self.instruments else "Disconnected"
             measure = self.measurements.get(label, DEFAULT_MEASURE.get(disc.label, ""))
             self.instrument_tree.insert(
                 "",
@@ -506,7 +619,9 @@ class VisacomTkApp(tk.Tk):
                 iid=label,
                 text=display_name(label),
                 values=(connected, measure),
+                tags=("connected" if label in self.instruments else "failed",),
             )
+        self.summary_label.configure(text=f"{len(self.instruments)} connected")
 
     def _build_live_cards(self) -> None:
         for child in self.live_frame.winfo_children():
@@ -522,7 +637,15 @@ class VisacomTkApp(tk.Tk):
             card = ttk.Frame(self.live_frame, style="Panel.TFrame", padding=12)
             card.grid(row=0, column=column, sticky="nsew", padx=(0, 10), pady=(0, 8))
             self.live_frame.columnconfigure(column, weight=1)
-            ttk.Label(card, text=display_name(label), style="Panel.TLabel", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W)
+            card_head = ttk.Frame(card, style="Panel.TFrame")
+            card_head.pack(fill=tk.X, pady=(0, 8))
+            ttk.Label(card_head, text=display_name(label), style="Panel.TLabel", font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT)
+            ttk.Button(
+                card_head,
+                text="Disconnect",
+                style="Ghost.TButton",
+                command=lambda item=label: self.disconnect_instrument(item),
+            ).pack(side=tk.RIGHT)
             self.live_vars[label] = {}
 
             if disc.label == "yokogawa":
@@ -552,9 +675,11 @@ class VisacomTkApp(tk.Tk):
         if disc is None:
             return
         options = MEASURE_OPTIONS.get(disc.label, [])
-        self.measure_combo.configure(values=options, state="readonly" if len(options) > 1 else "disabled")
+        is_connected = label in self.instruments
+        self.measure_combo.configure(values=options, state="readonly" if is_connected and len(options) > 1 else "disabled")
         self.selected_measure.set(self.measurements.get(label, DEFAULT_MEASURE.get(disc.label, "")))
         self._set_detail_text(f"IDN: {disc.idn}\n\nResource: {disc.resource_name}")
+        self._refresh_buttons()
 
     def _on_measure_change(self, _event: object = None) -> None:
         selection = self.instrument_tree.selection()
@@ -572,17 +697,15 @@ class VisacomTkApp(tk.Tk):
         disc = self.discovered.get(label)
         if inst is None or disc is None:
             return
+        self._set_status(f"Changing {display_name(label)} to {mtype}...", "info")
         threading.Thread(target=self._configure_measurement, args=(label, inst, disc.label, mtype), daemon=True).start()
 
     def _configure_measurement(self, label: str, inst: Any, base: str, mtype: str) -> None:
         try:
-            if base in ("keysight", "fluke"):
-                if mtype == "DC Voltage":
-                    inst.configure_dc_voltage()
-                elif mtype == "Resistance":
-                    inst.configure_resistance()
-                else:
-                    inst.configure_ac_voltage()
+            lock = self.instrument_locks.setdefault(label, threading.RLock())
+            with lock:
+                configure_for_measurement(inst, base, mtype)
+            self.events.put(("measure_configured", label, mtype))
         except Exception as exc:
             self.events.put(("reading", {"ts": datetime.now().isoformat(timespec="milliseconds"), "label": label, "error": str(exc)}))
 
@@ -607,8 +730,12 @@ class VisacomTkApp(tk.Tk):
 
     def _refresh_buttons(self) -> None:
         has_instruments = bool(self.instruments)
+        selection = self.instrument_tree.selection()
+        can_disconnect = bool(selection and selection[0] in self.instruments and not self.scanning)
+        self.scan_btn.configure(state=tk.DISABLED if self.scanning else tk.NORMAL)
         self.start_btn.configure(state=tk.NORMAL if has_instruments and not self.running and not self.scanning else tk.DISABLED)
         self.stop_btn.configure(state=tk.NORMAL if self.running else tk.DISABLED)
+        self.disconnect_btn.configure(state=tk.NORMAL if can_disconnect else tk.DISABLED)
         self.state_label.configure(text="Running" if self.running else "Stopped")
 
     def _set_detail_text(self, text: str) -> None:
