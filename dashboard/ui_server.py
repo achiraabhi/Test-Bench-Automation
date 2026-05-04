@@ -16,7 +16,7 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 # Allow importing the visacom package from the sibling instruments/ directory.
 sys.path.insert(0, str(Path(__file__).parent.parent / "instruments"))
@@ -63,6 +63,12 @@ COLORS = {
     "yellow": "#f6c343",
     "red": "#ff5c5c",
 }
+
+UI_EVENT_POLL_MS = 50
+UI_EVENT_BUDGET_MS = 12
+MAX_EVENTS_PER_TICK = 40
+LOG_ROW_LIMIT = 300
+LOG_FLUSH_LIMIT = 45
 
 
 def display_name(label: str) -> str:
@@ -131,12 +137,13 @@ def connect_instrument(disc: DiscoveredInstrument, measurement: str = "") -> Any
     return inst
 
 
-def do_reading(label: str, inst: Any, base: str, mtype: str) -> Optional[dict]:
+def do_reading(label: str, inst: Any, base: str, mtype: str, configure_dmm: bool = True) -> Optional[dict]:
     """Blocking VISA read. Called from the measurement worker thread."""
     ts = datetime.now().isoformat(timespec="milliseconds")
     try:
         if base in ("keysight", "fluke"):
-            configure_for_measurement(inst, base, mtype)
+            if configure_dmm:
+                configure_for_measurement(inst, base, mtype)
             if mtype == "DC Voltage":
                 return {
                     "ts": ts,
@@ -215,13 +222,16 @@ class VisacomTkApp(tk.Tk):
         self.measure_thread: Optional[threading.Thread] = None
         self.live_vars: Dict[str, Dict[str, tk.StringVar]] = {}
         self.instrument_locks: Dict[str, threading.RLock] = {}
+        self.configured_measurements: Dict[str, str] = {}
+        self.pending_log_rows: List[Tuple[str, str, str, Any, str]] = []
+        self.log_row_count = 0
         self.reconnecting: Set[str] = set()
         self.logo_image: Optional[tk.PhotoImage] = self._load_logo()
 
         self._configure_style()
         self._build_ui()
         self._set_status("Ready. Click Scan to discover instruments.", "info")
-        self.after(100, self._process_events)
+        self.after(UI_EVENT_POLL_MS, self._process_events)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _configure_style(self) -> None:
@@ -520,7 +530,10 @@ class VisacomTkApp(tk.Tk):
                 mtype = self.measurements.get(label, DEFAULT_MEASURE.get(disc.label, ""))
                 lock = self.instrument_locks.setdefault(label, threading.RLock())
                 with lock:
-                    reading = do_reading(label, inst, disc.label, mtype)
+                    if disc.label in ("keysight", "fluke") and self.configured_measurements.get(label) != mtype:
+                        configure_for_measurement(inst, disc.label, mtype)
+                        self.configured_measurements[label] = mtype
+                    reading = do_reading(label, inst, disc.label, mtype, configure_dmm=False)
                 if reading:
                     self.events.put(("reading", reading))
 
@@ -552,6 +565,8 @@ class VisacomTkApp(tk.Tk):
         self.readings.clear()
         for item in self.log_tree.get_children():
             self.log_tree.delete(item)
+        self.pending_log_rows.clear()
+        self.log_row_count = 0
         for fields in self.live_vars.values():
             for var in fields.values():
                 var.set("---")
@@ -559,8 +574,10 @@ class VisacomTkApp(tk.Tk):
         self._set_status("Reading history cleared.", "info")
 
     def _process_events(self) -> None:
+        started = time.monotonic()
+        processed = 0
         try:
-            while True:
+            while processed < MAX_EVENTS_PER_TICK and (time.monotonic() - started) * 1000 < UI_EVENT_BUDGET_MS:
                 event = self.events.get_nowait()
                 if event[0] == "scan_done":
                     self._apply_scan_results(event[1], event[2], event[3])
@@ -570,9 +587,11 @@ class VisacomTkApp(tk.Tk):
                     self._set_status(f"{display_name(event[1])} set to {event[2]}.", "info")
                 elif event[0] == "reconnect_done":
                     self._apply_reconnect_result(event[1], event[2], event[3])
+                processed += 1
         except queue.Empty:
             pass
-        self.after(100, self._process_events)
+        self._flush_log_rows()
+        self.after(UI_EVENT_POLL_MS, self._process_events)
 
     def _apply_reconnect_result(self, label: str, inst: Any, error: Optional[str]) -> None:
         self.reconnecting.discard(label)
@@ -581,6 +600,9 @@ class VisacomTkApp(tk.Tk):
             self._refresh_buttons()
             return
         self.instruments[label] = inst
+        disc = self.discovered.get(label)
+        if disc is not None:
+            self.configured_measurements[label] = self.measurements.get(label, DEFAULT_MEASURE.get(disc.label, ""))
         self.instrument_locks.setdefault(label, threading.RLock())
         self._refresh_instruments()
         self._build_live_cards()
@@ -597,6 +619,11 @@ class VisacomTkApp(tk.Tk):
         self.instruments = connected
         self.measurements = measurements
         self.instrument_locks = {label: threading.RLock() for label in found}
+        self.configured_measurements = {
+            label: measurements.get(label, DEFAULT_MEASURE.get(disc.label, ""))
+            for label, disc in found.items()
+            if label in connected
+        }
         self.scanning = False
         self._refresh_instruments()
         self._build_live_cards()
@@ -628,7 +655,7 @@ class VisacomTkApp(tk.Tk):
                 var = fields.get(param)
                 if var is not None:
                     var.set(f"{fmt_num(item['value'])} {item['unit']}".strip())
-                self._insert_log_row(reading["ts"], reading["label"], param, item["value"], item["unit"])
+                self._queue_log_row(reading["ts"], reading["label"], param, item["value"], item["unit"])
             ts_var = fields.get("Timestamp")
             if ts_var is not None:
                 ts_var.set(short_time(reading["ts"]))
@@ -643,7 +670,7 @@ class VisacomTkApp(tk.Tk):
             fields["Unit"].set(reading.get("unit", ""))
         if "Timestamp" in fields:
             fields["Timestamp"].set(short_time(reading["ts"]))
-        self._insert_log_row(
+        self._queue_log_row(
             reading["ts"],
             reading["label"],
             reading.get("param", ""),
@@ -651,15 +678,30 @@ class VisacomTkApp(tk.Tk):
             reading.get("unit", ""),
         )
 
+    def _queue_log_row(self, ts: str, label: str, param: str, value: Any, unit: str) -> None:
+        self.pending_log_rows.append((ts, label, param, value, unit))
+
+    def _flush_log_rows(self) -> None:
+        if not self.pending_log_rows:
+            return
+        rows = self.pending_log_rows[:LOG_FLUSH_LIMIT]
+        del self.pending_log_rows[:LOG_FLUSH_LIMIT]
+        for ts, label, param, value, unit in rows:
+            self._insert_log_row(ts, label, param, value, unit)
+
     def _insert_log_row(self, ts: str, label: str, param: str, value: Any, unit: str) -> None:
         self.log_tree.insert(
             "",
             0,
             values=(short_time(ts), display_name(label), param, fmt_num(value), unit),
         )
-        rows = self.log_tree.get_children()
-        if len(rows) > 300:
-            self.log_tree.delete(rows[-1])
+        self.log_row_count += 1
+        if self.log_row_count > LOG_ROW_LIMIT:
+            rows = self.log_tree.get_children()
+            overflow = self.log_row_count - LOG_ROW_LIMIT
+            for item in rows[-overflow:]:
+                self.log_tree.delete(item)
+            self.log_row_count = LOG_ROW_LIMIT
 
     def _refresh_instruments(self) -> None:
         for item in self.instrument_tree.get_children():
@@ -759,6 +801,7 @@ class VisacomTkApp(tk.Tk):
             lock = self.instrument_locks.setdefault(label, threading.RLock())
             with lock:
                 configure_for_measurement(inst, base, mtype)
+                self.configured_measurements[label] = mtype
             self.events.put(("measure_configured", label, mtype))
         except Exception as exc:
             self.events.put(("reading", {"ts": datetime.now().isoformat(timespec="milliseconds"), "label": label, "error": str(exc)}))
@@ -809,6 +852,7 @@ class VisacomTkApp(tk.Tk):
             except Exception:
                 pass
         self.instruments.clear()
+        self.configured_measurements.clear()
 
     def _wait_for_measure_thread(self) -> None:
         if self.measure_thread and self.measure_thread.is_alive():
